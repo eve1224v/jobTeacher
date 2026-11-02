@@ -12,7 +12,8 @@ import {
   CheckCircle2,
   Briefcase,
   X,
-  ArrowRight
+  ArrowRight,
+  AlertCircle
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -37,6 +38,26 @@ export const Header: React.FC<HeaderProps> = ({ onOpenSearch }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const searchContainerRef = useRef<HTMLDivElement>(null);
+
+  // Dynamic AI status check for Vercel / server
+  const [aiStatus, setAiStatus] = useState<{
+    hasApiKey: boolean;
+    keyName?: string | null;
+    model: string;
+    environment?: string;
+  } | null>(null);
+  const [showStatusModal, setShowStatusModal] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/gemini/status')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data) setAiStatus(data);
+      })
+      .catch((err) => {
+        console.warn('AI status check failed:', err);
+      });
+  }, []);
 
   // Click outside listener for search dropdown
   useEffect(() => {
@@ -312,11 +333,28 @@ export const Header: React.FC<HeaderProps> = ({ onOpenSearch }) => {
           <Search className="w-5 h-5" />
         </button>
 
-        {/* AI Engine Status Badge */}
-        <div className="hidden sm:flex items-center space-x-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 text-[11px] font-medium">
-          <Sparkles className="w-3.5 h-3.5 animate-pulse" />
-          <span>Gemini 3.8 Engine</span>
-        </div>
+        {/* AI Engine Status Badge (Click to see Vercel/Key setup guide) */}
+        <button
+          onClick={() => setShowStatusModal(true)}
+          className={`hidden sm:flex items-center space-x-1.5 px-2.5 py-1 rounded-full border text-[11px] font-medium transition cursor-pointer ${
+            aiStatus?.hasApiKey
+              ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-400 hover:bg-emerald-500/20'
+              : 'bg-amber-500/10 border-amber-500/30 text-amber-300 hover:bg-amber-500/20'
+          }`}
+          title="AI 상태 및 Vercel 환경변수 설정 가이드 보기"
+        >
+          {aiStatus?.hasApiKey ? (
+            <>
+              <Sparkles className="w-3.5 h-3.5 animate-pulse text-emerald-400" />
+              <span>Gemini AI 활성</span>
+            </>
+          ) : (
+            <>
+              <AlertCircle className="w-3.5 h-3.5 text-amber-400" />
+              <span>AI 키 확인/설정</span>
+            </>
+          )}
+        </button>
 
         {/* Theme Toggle Button */}
         <button
@@ -360,6 +398,81 @@ export const Header: React.FC<HeaderProps> = ({ onOpenSearch }) => {
           </div>
         </div>
       </div>
+
+      {/* Vercel & AI Configuration Guide Modal */}
+      {showStatusModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fadeIn">
+          <div className="w-full max-w-lg bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-6 space-y-4 text-xs text-slate-200">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center space-x-2">
+                <Sparkles className="w-4 h-4 text-blue-400" />
+                <h3 className="font-bold text-sm text-white">Gemini AI 연동 및 Vercel 배포 상태</h3>
+              </div>
+              <button
+                onClick={() => setShowStatusModal(false)}
+                className="p-1 text-slate-400 hover:text-white rounded"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div className="p-3.5 rounded-xl bg-slate-800/80 border border-slate-700 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-slate-400">API 키 인식 상태:</span>
+                  <span className={`font-bold px-2 py-0.5 rounded text-[11px] ${
+                    aiStatus?.hasApiKey
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                      : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                  }`}>
+                    {aiStatus?.hasApiKey ? '연결 완료 (Ready)' : '키 미인식 (데모 모드)'}
+                  </span>
+                </div>
+                {aiStatus?.keyName && (
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-slate-400">인식된 변수명:</span>
+                    <span className="text-blue-300 font-mono">{aiStatus.keyName}</span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-slate-400">사용 모델:</span>
+                  <span className="text-slate-200 font-mono">gemini-3.8-flash</span>
+                </div>
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-slate-400">실행 런타임:</span>
+                  <span className="text-indigo-300 font-mono">{aiStatus?.environment || 'node-server'}</span>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <h4 className="font-bold text-slate-100 flex items-center gap-1.5 text-xs">
+                  <span>🚀 Vercel 배포 시 AI 키 설정 3단계 가이드</span>
+                </h4>
+                <div className="space-y-1.5 text-slate-300">
+                  <div className="p-2.5 rounded-lg bg-slate-800/50 border border-slate-700/60 leading-relaxed">
+                    <strong>1. 환경변수 등록:</strong> Vercel 대시보드 ➔ <strong>Settings</strong> ➔ <strong>Environment Variables</strong>에 Key: <code className="bg-slate-900 px-1 py-0.5 rounded text-blue-300 font-mono">GEMINI_API_KEY</code>, Value: 발급받은 키 입력 후 <strong>Save</strong>합니다.
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-slate-800/50 border border-slate-700/60 leading-relaxed text-amber-200 bg-amber-950/20 border-amber-500/30">
+                    <strong>2. 반드시 Redeploy 실행 (필수):</strong> Vercel은 환경변수를 추가한 후 반드시 <strong>Deployments</strong> 탭 ➔ 최신 배포 ➔ <strong>Redeploy</strong>를 해야 서버리스 함수에 새 키가 주입됩니다!
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-slate-800/50 border border-slate-700/60 leading-relaxed">
+                    <strong>3. 동작 확인:</strong> <code className="bg-slate-900 px-1 py-0.5 rounded text-emerald-300 font-mono">/api/gemini/status</code> 경로에 접속하여 <code className="text-emerald-400 font-mono">"hasApiKey": true</code> 확인 가능합니다.
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="pt-2 flex justify-end">
+              <button
+                onClick={() => setShowStatusModal(false)}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs rounded-lg transition"
+              >
+                닫기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </header>
   );
 };

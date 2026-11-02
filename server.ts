@@ -1,5 +1,4 @@
 import express, { Request, Response } from 'express';
-import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -11,33 +10,70 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isProduction = process.env.NODE_ENV === 'production';
 const PORT = Number(process.env.PORT) || 3000;
 
-const app = express();
+export const app = express();
 app.use(express.json({ limit: '10mb' }));
 
-// Server-side Gemini AI Client
-const apiKey = process.env.GEMINI_API_KEY;
-const ai = apiKey
-  ? new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
+// CORS & Preflight handling for Vercel and cross-origin environments
+app.use((_req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  next();
+});
+
+// Vercel path normalization: handle both /api/gemini/* and /gemini/*
+app.use((req, _res, next) => {
+  if (req.url.startsWith('/gemini')) {
+    req.url = '/api' + req.url;
+  }
+  next();
+});
+
+// Dynamic API Key Resolution (support GEMINI_API_KEY, VITE_GEMINI_API_KEY, API_KEY, GOOGLE_API_KEY)
+function getGeminiApiKey(): string | undefined {
+  return (
+    process.env.GEMINI_API_KEY ||
+    process.env.VITE_GEMINI_API_KEY ||
+    process.env.API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    process.env.GOOGLE_GENAI_API_KEY
+  );
+}
+
+function getAiClient(): GoogleGenAI | null {
+  const key = getGeminiApiKey();
+  if (!key) return null;
+  return new GoogleGenAI({
+    apiKey: key,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
       },
-    })
-  : null;
+    },
+  });
+}
 
 // Health / Status Check
 app.get('/api/gemini/status', (_req: Request, res: Response) => {
+  const key = getGeminiApiKey();
   res.json({
-    hasApiKey: !!apiKey,
+    hasApiKey: !!key,
+    keyName: process.env.GEMINI_API_KEY
+      ? 'GEMINI_API_KEY'
+      : process.env.VITE_GEMINI_API_KEY
+      ? 'VITE_GEMINI_API_KEY'
+      : process.env.API_KEY
+      ? 'API_KEY'
+      : null,
     model: 'gemini-3.8-flash',
     status: 'ready',
+    environment: process.env.VERCEL ? 'vercel-serverless' : 'node-server',
   });
 });
 
 // Helper for Gemini generateContent with 10s timeout
 async function callGemini(prompt: string, systemInstruction?: string, isJson: boolean = false): Promise<string> {
+  const ai = getAiClient();
   if (!ai) {
     throw new Error('GEMINI_API_KEY_NOT_CONFIGURED');
   }
@@ -66,7 +102,7 @@ app.post('/api/gemini/analyze-job', async (req: Request, res: Response) => {
       return res.status(400).json({ error: '채용공고 원문 텍스트를 입력해주세요.' });
     }
 
-    if (!ai) {
+    if (!getGeminiApiKey()) {
       // Graceful domain fallback for demo/offline
       return res.json({
         companyName: companyHint || '현대자동차',
@@ -147,7 +183,7 @@ app.post('/api/gemini/generate-questions', async (req: Request, res: Response) =
   try {
     const { company, jobTitle, major, techStack, difficulty, count = 5 } = req.body;
 
-    if (!ai) {
+    if (!getGeminiApiKey()) {
       // Domain-specific realistic fallback questions
       const fallbackQuestions = [
         {
@@ -224,7 +260,7 @@ app.post('/api/gemini/evaluate-answer', async (req: Request, res: Response) => {
       return res.status(400).json({ error: '답변을 작성해주세요.' });
     }
 
-    if (!ai) {
+    if (!getGeminiApiKey()) {
       const charCount = userAnswer.trim().length;
       const score = Math.min(95, Math.max(65, Math.floor(charCount / 3) + 50));
       return res.json({
@@ -282,7 +318,7 @@ app.post('/api/gemini/match-experience', async (req: Request, res: Response) => 
   try {
     const { jobPosting, userProfile, selectedProject } = req.body;
 
-    if (!ai) {
+    if (!getGeminiApiKey()) {
       return res.json({
         overallMatchRate: 88,
         fulfilledCompetencies: [
@@ -356,7 +392,7 @@ app.post('/api/gemini/tech-insight', async (req: Request, res: Response) => {
       return res.status(400).json({ error: '기술 키워드를 전달해주세요.' });
     }
 
-    if (!ai) {
+    if (!getGeminiApiKey()) {
       return res.json({
         techKeyword,
         concept: `${techKeyword}는 최신 스마트 모빌리티 및 지능형 생산공장의 핵심 기반 기술로서, 데이터 수집, 자동화 및 실시간 최적화를 이끄는 핵심 동력입니다.`,
@@ -402,6 +438,7 @@ JSON 응답:
 // Vite Middleware for Development / Static file server for Production
 async function setupViteOrStatic() {
   if (!isProduction) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -420,7 +457,12 @@ async function setupViteOrStatic() {
   });
 }
 
-setupViteOrStatic().catch((err) => {
-  console.error('Failed to start server:', err);
-  process.exit(1);
-});
+// Only listen on port if not running as a Vercel Serverless Function
+if (!process.env.VERCEL) {
+  setupViteOrStatic().catch((err) => {
+    console.error('Failed to start server:', err);
+    process.exit(1);
+  });
+}
+
+export default app;
