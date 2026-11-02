@@ -1,0 +1,6 @@
+{
+  "name": "AutoInsight AI",
+  "description": "자동차 산업 맞춤형 AI 취업 플랫폼 - 기업 제조공정 시각화, 기술 트렌드 분석, AI 전공 면접 및 경험 매칭",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
