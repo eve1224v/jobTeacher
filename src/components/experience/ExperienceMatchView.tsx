@@ -22,6 +22,7 @@ import {
   ExternalLink,
   Target
 } from 'lucide-react';
+import { safeApiPost } from '../../services/apiClient';
 
 export const ExperienceMatchView: React.FC = () => {
   const { 
@@ -66,18 +67,11 @@ export const ExperienceMatchView: React.FC = () => {
     setJobParseError(null);
 
     try {
-      const res = await fetch('/api/gemini/analyze-job', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          rawText: rawJobText,
-          companyHint: currentJob.companyName,
-          roleHint: currentJob.title,
-        }),
+      const data = await safeApiPost<any>('/api/gemini/analyze-job', {
+        rawText: rawJobText,
+        companyHint: currentJob.companyName,
+        roleHint: currentJob.title,
       });
-
-      if (!res.ok) throw new Error('채용공고 분석 실패');
-      const data = await res.json();
 
       const newJob: JobPosting = {
         id: `job-custom-${Date.now()}`,
@@ -115,22 +109,15 @@ export const ExperienceMatchView: React.FC = () => {
     setIsMatching(true);
 
     try {
-      const res = await fetch('/api/gemini/match-experience', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jobPosting: currentJob,
-          userProfile: {
-            major: userProfile.major,
-            skills: userProfile.skills,
-            certifications: userProfile.certifications,
-          },
-          selectedProject,
-        }),
+      const data = await safeApiPost<any>('/api/gemini/match-experience', {
+        jobPosting: currentJob,
+        userProfile: {
+          major: userProfile.major,
+          skills: userProfile.skills,
+          certifications: userProfile.certifications,
+        },
+        selectedProject,
       });
-
-      if (!res.ok) throw new Error('경험 매칭 호출 실패');
-      const data = await res.json();
 
       setMatchResult({
         jobPostingId: currentJob.id,

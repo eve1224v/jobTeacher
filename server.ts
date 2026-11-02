@@ -435,6 +435,14 @@ JSON 응답:
   }
 });
 
+// Fallback 404 for undefined /api/* routes (Always return JSON, never HTML)
+app.all('/api/*', (req: Request, res: Response) => {
+  res.status(404).json({
+    error: `요청하신 API 경로를 찾을 수 없습니다: ${req.method} ${req.originalUrl || req.url}`,
+    status: 404,
+  });
+});
+
 // Vite Middleware for Development / Static file server for Production
 async function setupViteOrStatic() {
   if (!isProduction) {

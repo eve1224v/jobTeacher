@@ -14,6 +14,7 @@ import {
   Building2,
   ExternalLink
 } from 'lucide-react';
+import { safeApiPost } from '../../services/apiClient';
 
 interface TechDetailModalProps {
   trend: TechnologyTrend | null;
@@ -36,16 +37,10 @@ export const TechDetailModal: React.FC<TechDetailModalProps> = ({ trend, onClose
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch('/api/gemini/tech-insight', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            techKeyword: trend.name,
-            companyContext: currentCompany.name,
-          }),
+        const data = await safeApiPost<any>('/api/gemini/tech-insight', {
+          techKeyword: trend.name,
+          companyContext: currentCompany.name,
         });
-        if (!res.ok) throw new Error('기술 심층 분석 호출 실패');
-        const data = await res.json();
         setAiInsight(data);
       } catch (err: any) {
         console.error('Fetch insight error:', err);

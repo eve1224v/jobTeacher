@@ -50,7 +50,10 @@ export const Header: React.FC<HeaderProps> = ({ onOpenSearch }) => {
 
   useEffect(() => {
     fetch('/api/gemini/status')
-      .then((res) => (res.ok ? res.json() : null))
+      .then((res) => {
+        const ct = res.headers.get('content-type') || '';
+        return res.ok && ct.includes('application/json') ? res.json() : null;
+      })
       .then((data) => {
         if (data) setAiStatus(data);
       })

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { COMPANIES_DATA, SAMPLE_JOB_POSTINGS } from '../../data/mockData';
 import { InterviewQuestion, InterviewAnswer } from '../../types';
+import { safeApiPost } from '../../services/apiClient';
 import { 
   MessageSquareCode, 
   Sparkles, 
@@ -52,6 +53,7 @@ export const InterviewPrepView: React.FC = () => {
   const [showHint, setShowHint] = useState<boolean>(false);
   const [showModelAnswer, setShowModelAnswer] = useState<boolean>(false);
   const [isEvaluating, setIsEvaluating] = useState<boolean>(false);
+  const [apiNotice, setApiNotice] = useState<string | null>(null);
 
   const activeQuestion: InterviewQuestion | undefined = interviewQuestions[currentIndex];
 
@@ -60,34 +62,41 @@ export const InterviewPrepView: React.FC = () => {
     (a) => a.questionId === activeQuestion?.id
   );
 
-  // Generate Questions via API
+  // Generate Questions via API with Safe Client
   const handleGenerateQuestions = async () => {
     setIsGenerating(true);
+    setApiNotice(null);
+
     try {
-      const res = await fetch('/api/gemini/generate-questions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const data = await safeApiPost<{ questions?: InterviewQuestion[] }>(
+        '/api/gemini/generate-questions',
+        {
           company: targetCompany,
           jobTitle: targetRole,
           major: userMajor,
           techStack: userTechStack,
           difficulty,
           count: questionCount,
-        }),
-      });
+        }
+      );
 
-      if (!res.ok) throw new Error('면접 질문 생성 실패');
-      const data = await res.json();
-      if (data.questions && data.questions.length > 0) {
+      if (data?.questions && data.questions.length > 0) {
         setInterviewQuestions(data.questions);
         setCurrentIndex(0);
         setUserAnswerInput('');
         setShowHint(false);
         setShowModelAnswer(false);
+      } else {
+        throw new Error('질문 목록이 비어 있습니다.');
       }
     } catch (err: any) {
-      console.error('Generate questions error:', err);
+      console.warn('[질문 생성 fallback]', err?.message || err);
+      setApiNotice(
+        err?.message?.includes('404')
+          ? 'Vercel API 라우트 연결 중 (데모 모드로 질문을 즉시 제공합니다)'
+          : err?.message || '실전 질문 세트를 즉시 준비했습니다.'
+      );
+
       // Fallback questions if error
       const fallbackList: InterviewQuestion[] = [
         {
@@ -118,25 +127,23 @@ export const InterviewPrepView: React.FC = () => {
     }
   };
 
-  // Submit Answer for AI Evaluation
+  // Submit Answer for AI Evaluation with Safe Client
   const handleEvaluateAnswer = async () => {
     if (!activeQuestion || !userAnswerInput.trim()) return;
     setIsEvaluating(true);
+    setApiNotice(null);
+
     try {
-      const res = await fetch('/api/gemini/evaluate-answer', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const evalData = await safeApiPost(
+        '/api/gemini/evaluate-answer',
+        {
           question: activeQuestion.question,
           userAnswer: userAnswerInput,
           company: targetCompany,
           jobTitle: targetRole,
           modelAnswer: activeQuestion.modelAnswer,
-        }),
-      });
-
-      if (!res.ok) throw new Error('답변 평가 실패');
-      const evalData = await res.json();
+        }
+      );
 
       const newRecord: InterviewAnswer = {
         questionId: activeQuestion.id,
@@ -148,8 +155,8 @@ export const InterviewPrepView: React.FC = () => {
 
       recordInterviewAnswer(newRecord);
     } catch (err: any) {
-      console.error('Evaluation error:', err);
-      // Fallback scoring
+      console.warn('[답변 평가 fallback]', err?.message || err);
+      // Robust domain evaluation fallback
       const fallbackRecord: InterviewAnswer = {
         questionId: activeQuestion.id,
         questionText: activeQuestion.question,
@@ -208,6 +215,21 @@ export const InterviewPrepView: React.FC = () => {
             * 공식 현대차/부품사 기출 경향 반영 (예상 질문으로 생성됨)
           </span>
         </div>
+
+        {apiNotice && (
+          <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-300 text-xs flex items-center justify-between animate-fadeIn">
+            <span className="flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+              <span>{apiNotice}</span>
+            </span>
+            <button
+              onClick={() => setApiNotice(null)}
+              className="text-slate-400 hover:text-white text-xs ml-2"
+            >
+              닫기
+            </button>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
           {/* Target Company */}
