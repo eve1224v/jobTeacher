@@ -627,8 +627,16 @@ async function setupViteOrStatic() {
   });
 }
 
-// Only listen on port if not running as a Vercel Serverless Function
-if (!process.env.VERCEL) {
+// Only start server listener if executed directly as a standalone server, never when imported in Vercel Serverless
+const isDirectRun = !process.env.VERCEL && Boolean(
+  process.argv[1] && (
+    process.argv[1].endsWith('server.ts') || 
+    process.argv[1].endsWith('server.js') ||
+    process.argv[1].includes('tsx')
+  )
+);
+
+if (isDirectRun) {
   setupViteOrStatic().catch((err) => {
     console.error('Failed to start server:', err);
     process.exit(1);
