@@ -62,9 +62,21 @@ export async function safeApiPost<T = any>(
     if (isJson) {
       try {
         const errJson = await response.json();
-        errorDetail = errJson.error || errJson.message || '';
+        if (typeof errJson.error === 'string') {
+          errorDetail = errJson.error;
+        } else if (errJson.error && typeof errJson.error === 'object') {
+          errorDetail = errJson.error.message || errJson.error.code || JSON.stringify(errJson.error);
+        } else if (typeof errJson.message === 'string') {
+          errorDetail = errJson.message;
+        } else if (errJson.message && typeof errJson.message === 'object') {
+          errorDetail = errJson.message.message || errJson.message.code || JSON.stringify(errJson.message);
+        } else if (typeof errJson.detail === 'string') {
+          errorDetail = errJson.detail;
+        } else {
+          errorDetail = typeof errJson === 'string' ? errJson : JSON.stringify(errJson);
+        }
       } catch {
-        // ignore
+        // ignore JSON parse error
       }
     } else {
       try {
@@ -72,9 +84,9 @@ export async function safeApiPost<T = any>(
         if (errText.includes('The page could not be found') || errText.includes('404')) {
           errorDetail = 'Vercel 서버리스 함수 경로를 찾을 수 없습니다 (404 Not Found).';
         } else if (errText.includes('FUNCTION_INVOCATION_TIMEOUT')) {
-          errorDetail = 'Vercel 서버리스 실행 시간(10초)을 초과했습니다.';
+          errorDetail = 'Vercel 서버리스 실행 시간 제한을 초과했습니다 (10초).';
         } else {
-          errorDetail = errText.slice(0, 100);
+          errorDetail = errText.slice(0, 150);
         }
       } catch {
         // ignore
@@ -88,8 +100,12 @@ export async function safeApiPost<T = any>(
       userFriendlyMessage = `[인증 오류] Gemini API 키 인증에 실패했습니다 (${response.status}). Vercel 환경변수(GEMINI_API_KEY) 설정을 확인해주세요.`;
     } else if (response.status === 429) {
       userFriendlyMessage = `[429 Too Many Requests] AI API 요청 한도를 초과했습니다. 잠시 후 다시 시도해주세요.`;
+    } else if (response.status === 504) {
+      userFriendlyMessage = `[504 Gateway Timeout] AI 처리 시간이 제한을 초과했습니다. 다시 시도해주세요.`;
     } else if (response.status >= 500) {
       userFriendlyMessage = `[500 Server Error] AI 서버 처리 중 오류가 발생했습니다: ${errorDetail || '내부 오류'}`;
+    } else if (errorDetail) {
+      userFriendlyMessage = `[${response.status} 오류] ${errorDetail}`;
     }
 
     console.warn(`[API 오류] ${endpoint} - 상태코드: ${response.status}`, { detail: errorDetail });

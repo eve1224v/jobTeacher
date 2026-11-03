@@ -1,17 +1,34 @@
-import express, { Request, Response } from 'express';
+import express from 'express';
+import type { Request, Response, NextFunction } from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 
 dotenv.config();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isProduction = process.env.NODE_ENV === 'production';
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = 3000;
 
 export const app = express();
+
+// Body Parser with Vercel Serverless pre-parsed body support
+app.use((req: any, _res: Response, next: NextFunction) => {
+  if (typeof req.body === 'string') {
+    try {
+      req.body = JSON.parse(req.body);
+      req._body = true;
+    } catch {
+      // ignore
+    }
+  } else if (req.body !== undefined && typeof req.body === 'object') {
+    req._body = true;
+  }
+  next();
+});
 app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // CORS & Preflight handling for Vercel and cross-origin environments
 app.use((_req, res, next) => {
@@ -71,12 +88,24 @@ app.get('/api/gemini/status', (_req: Request, res: Response) => {
   });
 });
 
-// Helper for Gemini generateContent with 35s timeout and ThinkingLevel.LOW for fast latency
+// Clean JSON text (strips markdown code blocks like ```json ... ```)
+function cleanJsonText(raw: string): string {
+  let cleaned = (raw || '').trim();
+  if (cleaned.startsWith('```')) {
+    cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  }
+  return cleaned;
+}
+
+// Timeout: 8s on Vercel to stay safely under the 10s serverless limit, 12s in local/Node
+const DEFAULT_TIMEOUT_MS = process.env.VERCEL ? 8000 : 12000;
+
+// Helper for Gemini generateContent with timeout and ThinkingLevel.LOW for fast latency
 async function callGemini(
   prompt: string,
   systemInstruction?: string,
   isJson: boolean = false,
-  timeoutMs: number = 35000
+  timeoutMs: number = DEFAULT_TIMEOUT_MS
 ): Promise<string> {
   const ai = getAiClient();
   if (!ai) {
@@ -98,7 +127,7 @@ async function callGemini(
       },
     },
   }).then((res) => {
-    const text = res.text || '';
+    const text = res.text || (res as any).candidates?.[0]?.content?.parts?.map((p: any) => p.text).join('') || '';
     if (!text.trim()) {
       throw new Error('GEMINI_EMPTY_RESPONSE');
     }
@@ -108,41 +137,77 @@ async function callGemini(
   return Promise.race([callPromise, timeoutPromise]);
 }
 
+// Extract company and role heuristics from raw posting text
+function extractJobHeuristics(rawText: string, companyHint?: string, roleHint?: string) {
+  let company = companyHint || '현대자동차';
+  if (/현대오토에버/i.test(rawText)) company = '현대오토에버';
+  else if (/현대모비스/i.test(rawText)) company = '현대모비스';
+  else if (/현대위아/i.test(rawText)) company = '현대위아';
+  else if (/현대트랜시스/i.test(rawText)) company = '현대트랜시스';
+  else if (/HL만도|만도/i.test(rawText)) company = 'HL만도';
+  else if (/서연이화/i.test(rawText)) company = '서연이화';
+  else if (/기아|KIA/i.test(rawText)) company = '기아';
+  else if (/현대차|현대자동차/i.test(rawText)) company = '현대자동차';
+
+  let role = roleHint || '스마트제조/제조DX 엔지니어';
+  if (/품질|QC|QA/i.test(rawText)) role = '스마트 품질관리 엔지니어';
+  else if (/생산기술|생기/i.test(rawText)) role = '생산기술 엔지니어';
+  else if (/데이터|AI|머신러닝/i.test(rawText)) role = '제조 데이터/AI 엔지니어';
+  else if (/설비|보전/i.test(rawText)) role = '스마트 설비보전 엔지니어';
+  else if (/MES|SW|소프트웨어/i.test(rawText)) role = '스마트팩토리 MES 개발자';
+
+  return { company, role };
+}
+
+// Build structured fallback analysis for automotive job postings
+function buildFallbackJobAnalysis(company: string, role: string, rawText: string = '') {
+  const lowerText = rawText.toLowerCase();
+  const knownTech = ['Python', 'SQL', 'C++', 'Java', 'PLC', 'OPC-UA', 'MQTT', 'Docker', 'Kubernetes', 'Kafka', 'Computer Vision', 'OpenCV', 'MES', 'SCADA'];
+  const matchedTech = knownTech.filter((t) => lowerText.includes(t.toLowerCase()));
+  const coreTechnologies = matchedTech.length > 0 ? matchedTech : ['Python', 'SQL', 'OPC-UA', 'OpenCV', 'Docker', 'MES'];
+
+  return {
+    companyName: company,
+    jobTitle: role,
+    department: '생산기술본부 제조솔루션부',
+    mainDuties: [
+      '스마트팩토리 설비(PLC, 센서) 인터페이스 및 MES 연계 시스템 구축',
+      'AI 비전 기반 인라인 용접/도장 품질 검사 알고리즘 현장 적용 및 검증',
+      '공정 사이클타임(C/T) 단축 및 설비 가동 효율(OEE) 분석 파이프라인 개발',
+      '디지털 트윈 기반 가상 시운전(Virtual Commissioning) 시스템 운영'
+    ],
+    requiredQualifications: [
+      '컴퓨터공학, 기계공학, 전자공학 또는 유관 이공계 학사 이상',
+      'Python, C++, Java 중 1개 이상 프로그래밍 가능자',
+      'SQL 데이터베이스 및 기초 데이터 분석 역량',
+      '산업용 통신(OPC-UA, MQTT) 또는 PLC 기본 이해자'
+    ],
+    preferredQualifications: [
+      '스마트팩토리, 머신비전 관련 프로젝트 또는 인턴십 경험자',
+      '클라우드 환경(AWS, GCP, Azure) 또는 컨테이너(Docker, K8s) 활용 경험',
+      '자동차 제조공정(프레스, 차체, 도장, 의장) 도메인 이해 보유자'
+    ],
+    coreTechnologies,
+    competencyKeywords: ['제조 데이터 분석', '이상 감지', '산업용 통신', '공정 최적화', '현장 도메인 이해'],
+    summary: `${company} ${role} 분야 채용공고 원문을 기반으로 구조화 분석된 직무 요약입니다.`,
+    isFallback: true,
+  };
+}
+
 // 1. Analyze Job Posting
 app.post('/api/gemini/analyze-job', async (req: Request, res: Response) => {
   try {
-    const { rawText, companyHint, roleHint } = req.body;
+    const rawText = req.body?.rawText;
+    const companyHint = req.body?.companyHint;
+    const roleHint = req.body?.roleHint;
+
     if (!rawText || typeof rawText !== 'string' || !rawText.trim()) {
       return res.status(400).json({ error: '채용공고 원문 텍스트를 입력해주세요.' });
     }
 
     if (!getGeminiApiKey()) {
-      // Graceful domain fallback for demo/offline
-      return res.json({
-        companyName: companyHint || '현대자동차',
-        jobTitle: roleHint || '스마트제조/제조DX 엔지니어',
-        department: '생산기술본부 제조솔루션부',
-        mainDuties: [
-          '스마트팩토리 설비 데이터 인터페이스(PLC, 센서) 및 MES 연계 시스템 구축',
-          'AI 비전 기반 인라인 조립/용접 품질 검사 솔루션 도입 및 알고리즘 검증',
-          '공정 사이클타임 단축 및 생산성 최적화 데이터 파이프라인 개발',
-          '디지털 트윈 기반 가상 시운전(Virtual Commissioning) 시스템 운영'
-        ],
-        requiredQualifications: [
-          '컴퓨터공학, 전자공학, 기계/산업공학 또는 관련 이공계 학사 이상',
-          'Python, C++, Java 중 1개 이상 프로그래밍 언어 숙련자',
-          '제조 데이터베이스(SQL) 및 REST API 설계/활용 역량',
-          '산업용 통신(OPC-UA, MQTT, Modbus) 또는 PLC 기본 이해'
-        ],
-        preferredQualifications: [
-          '스마트팩토리, 제조 데이터 분석 또는 머신비전 관련 프로젝트 수행 경험자',
-          '클라우드 환경(AWS, GCP, Azure) 또는 컨테이너(Docker, K8s) 활용 경험',
-          '자동차 제조공정(프레스, 차체, 도장, 의장) 도메인 이해 보유자'
-        ],
-        coreTechnologies: ['Python', 'SQL', 'OPC-UA', 'Computer Vision', 'Docker', 'MES', 'Kafka'],
-        competencyKeywords: ['제조 데이터 분석', '공정 최적화', '이상 감지', '산업용 통신', '문제 해결력'],
-        summary: '완성차 제조공정의 지능화 및 제조DX 전환을 주도할 스마트팩토리 솔루션 및 데이터 엔지니어를 채용하는 공고입니다.'
-      });
+      const { company, role } = extractJobHeuristics(rawText, companyHint, roleHint);
+      return res.json(buildFallbackJobAnalysis(company, role, rawText));
     }
 
     const systemInstruction = `당신은 자동차 제조 산업(현대자동차, 기아, 현대모비스, 현대오토에버 등) 전문 AI 채용 컨설턴트입니다.
@@ -162,33 +227,14 @@ app.post('/api/gemini/analyze-job', async (req: Request, res: Response) => {
 
     const prompt = `[채용공고 원문]\n${rawText}\n\n[추가 힌트: 기업명=${companyHint || '없음'}, 희망직무=${roleHint || '없음'}]`;
     const resultText = await callGemini(prompt, systemInstruction, true);
-    const parsed = JSON.parse(resultText);
+    const cleaned = cleanJsonText(resultText);
+    const parsed = JSON.parse(cleaned);
     return res.json(parsed);
   } catch (error: any) {
-    console.error('Job analyze error:', error);
-    // Graceful domain fallback if Gemini call fails or times out
-    return res.json({
-      companyName: req.body.companyHint || '현대자동차',
-      jobTitle: req.body.roleHint || '스마트제조/제조DX 엔지니어',
-      department: '생산기술본부 제조솔루션부',
-      mainDuties: [
-        '스마트팩토리 설비(PLC, 센서) 인터페이스 및 MES 연계 시스템 구축',
-        'AI 비전 기반 인라인 용접/도장 품질 검사 알고리즘 현장 적용',
-        '공정 사이클타임(C/T) 단축 및 설비 가동 효율(OEE) 분석'
-      ],
-      requiredQualifications: [
-        '컴퓨터공학, 기계공학, 전자공학 또는 유관 이공계 학사 이상',
-        'Python, C++, Java 중 1개 이상 프로그래밍 가능자',
-        'SQL 데이터베이스 및 기초 데이터 분석 역량'
-      ],
-      preferredQualifications: [
-        '스마트팩토리, 머신비전 관련 프로젝트 또는 인턴십 경험자',
-        '산업용 통신(OPC-UA, MQTT) 또는 PLC 기본 이해자'
-      ],
-      coreTechnologies: ['Python', 'SQL', 'OPC-UA', 'OpenCV', 'Docker', 'MES'],
-      competencyKeywords: ['제조 데이터 분석', '이상 감지', '산업용 통신', '공정 최적화'],
-      summary: '완성차 제조공정의 지능화 및 제조DX 전환을 주도할 스마트팩토리 솔루션 및 데이터 엔지니어를 채용하는 공고입니다.'
-    });
+    console.warn('Job analyze fallback triggered:', error?.message || error);
+    const text = typeof req.body?.rawText === 'string' ? req.body.rawText : '';
+    const { company, role } = extractJobHeuristics(text, req.body?.companyHint, req.body?.roleHint);
+    return res.json(buildFallbackJobAnalysis(company, role, text));
   }
 });
 
@@ -255,7 +301,8 @@ JSON 형식:
 
     const prompt = `기업: ${company || '현대자동차'}\n직무: ${jobTitle || '스마트제조/제조DX'}\n전공: ${major || '컴퓨터/기계공학'}\n기술스택: ${techStack || 'Python, C++, SQL, 제조데이터'}\n난이도: ${difficulty || '중급'}\n질문 개수: ${count}`;
     const resultText = await callGemini(prompt, systemInstruction, true);
-    const parsed = JSON.parse(resultText);
+    const cleaned = cleanJsonText(resultText);
+    const parsed = JSON.parse(cleaned);
     return res.json(parsed);
   } catch (error: any) {
     console.warn('Generate questions fallback triggered:', error?.message || error);
@@ -348,7 +395,8 @@ app.post('/api/gemini/evaluate-answer', async (req: Request, res: Response) => {
 
     const prompt = `[면접 질문]\n${question}\n\n[모범 답변 가이드]\n${modelAnswer || '없음'}\n\n[지원자 실제 답변]\n${userAnswer}\n\n[지원 기업/직무: ${company || '현대자동차'} / ${jobTitle || '제조DX'}]`;
     const resultText = await callGemini(prompt, systemInstruction, true);
-    const parsed = JSON.parse(resultText);
+    const cleaned = cleanJsonText(resultText);
+    const parsed = JSON.parse(cleaned);
     return res.json(parsed);
   } catch (error: any) {
     console.warn('Evaluate answer API fallback triggered:', error?.message || error);
@@ -456,15 +504,16 @@ JSON 응답:
 
     const prompt = `[채용공고 정보]\n${JSON.stringify(jobPosting, null, 2)}\n\n[지원자 프로필]\n${JSON.stringify(userProfile, null, 2)}\n\n[선택된 프로젝트 경험]\n${JSON.stringify(selectedProject, null, 2)}`;
     const resultText = await callGemini(prompt, systemInstruction, true);
-    const parsed = JSON.parse(resultText);
+    const cleaned = cleanJsonText(resultText);
+    const parsed = JSON.parse(cleaned);
     return res.json(parsed);
   } catch (error: any) {
     console.warn('Match experience API fallback triggered:', error?.message || error);
     // Graceful domain fallback so user experience is smooth and never crashes with 500
     const fallback = buildFallbackMatchResult(
-      req.body.jobPosting,
-      req.body.userProfile,
-      req.body.selectedProject,
+      req.body?.jobPosting,
+      req.body?.userProfile,
+      req.body?.selectedProject,
       'AI 응답 지연으로 도메인 최적화 분석 데이터가 즉시 적용되었습니다.'
     );
     return res.json(fallback);
@@ -512,7 +561,8 @@ JSON 응답:
 
     const prompt = `기술 키워드: ${techKeyword}\n연관 기업 컨텍스트: ${companyContext || '현대자동차그룹'}`;
     const resultText = await callGemini(prompt, systemInstruction, true);
-    const parsed = JSON.parse(resultText);
+    const cleaned = cleanJsonText(resultText);
+    const parsed = JSON.parse(cleaned);
     return res.json(parsed);
   } catch (error: any) {
     console.warn('Tech insight fallback triggered:', error?.message || error);
@@ -541,6 +591,17 @@ app.all('/api/*', (req: Request, res: Response) => {
   res.status(404).json({
     error: `요청하신 API 경로를 찾을 수 없습니다: ${req.method} ${req.originalUrl || req.url}`,
     status: 404,
+  });
+});
+
+// Global Error Handler for Express (Ensures JSON is always returned, prevents 500 HTML or [object Object])
+app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+  console.error('[Express 글로벌 에러]', err?.message || err);
+  const status = typeof err?.status === 'number' && err.status >= 400 && err.status < 600 ? err.status : 500;
+  const message = typeof err?.message === 'string' ? err.message : '서버 내부 처리 중 오류가 발생했습니다.';
+  res.status(status).json({
+    error: message,
+    status,
   });
 });
 

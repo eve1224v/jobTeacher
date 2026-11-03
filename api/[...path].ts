@@ -8,5 +8,12 @@ export default function handler(req: any, res: any) {
   } else if (!req.url.startsWith('/api')) {
     req.url = `/api${req.url.startsWith('/') ? '' : '/'}${req.url}`;
   }
+  req.originalUrl = req.url;
+
+  // Mark body as already parsed by Vercel to prevent Express body-parser from hanging
+  if (req.body !== undefined) {
+    req._body = true;
+  }
+
   return app(req, res);
 }
